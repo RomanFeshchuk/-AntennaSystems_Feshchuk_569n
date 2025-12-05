@@ -1,134 +1,130 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import math
 
-# -----------------------------
-# ВХОДНЫЕ ДАННЫЕ (Вариант 10)
-# -----------------------------
-lam = 0.029         # длина волны λ = 2.9 см
-d = 0.02            # расстояние между щелями = 2 см
-N = 14              # количество щелей (тип 1 по табл. 4)
+# -------------------- ВХІДНІ ДАНІ --------------------
+lam = 2.9   # довжина хвилі (см)
+a = 2.3     # ширина широкої стінки хвилеводу (см)
+lam_c = 2 * a
+lam_g = lam / np.sqrt(1 - (lam / lam_c)**2)
 
-k = 2 * np.pi / lam  # волновое число
+d = 2.0     # відстань між щілинами
+N = 14      # кількість щілин
+nu = 1      # шаховий порядок → ν = 1
 
-# Угловая сетка: DIAGRAM FOR θ ∈ [–90°, +90°]
-theta_deg = np.linspace(-90, 90, 2000)
-theta = np.deg2rad(theta_deg)
+theta_deg = np.linspace(-90, 90, 20001)
+theta = np.radians(theta_deg)
 
-# ----------------------------------
-# ЭЛЕМЕНТНА ДІАГРАМА (приближение)
-# ----------------------------------
-# Для продольных щелей в широкой стенке:
-# F_el(θ) ≈ |cosθ|
-def F_element(theta):
-    return np.abs(np.cos(theta))
+# -------------------- ЕЛЕМЕНТНА ДС --------------------
+def F1H(theta):
+    cos_t = np.cos(theta)
+    num = np.cos(0.5 * np.pi * np.sin(theta))
+    F = np.zeros_like(theta)
 
-# ----------------------------------
-# МНОЖИТЕЛЬ РЕШЕТКИ
-# ----------------------------------
-# AF(θ) = sin(N*ψ/2) / (N*sin(ψ/2)),
-# ψ = k*d*sin(θ)
-def array_factor(theta):
-    psi = k * d * np.sin(theta)
-    psi_half = psi / 2
+    mask = np.abs(cos_t) > 1e-6
+    F[mask] = num[mask] / cos_t[mask]
+    F[~mask] = 0.0
+    return F
 
-    num = np.sin(N * psi_half)
-    den = N * np.sin(psi_half)
+# -------------------- МНОЖНИК РЕШІТКИ --------------------
+def F_HC(theta):
+    psi = 2 * np.pi * d * (np.sin(theta) / lam - 1 / lam_g) + nu * np.pi
+    psi2 = psi / 2
+    num = np.sin(N * psi2)
+    den = N * np.sin(psi2)
 
-    den = np.where(np.abs(den) < 1e-9, 1e-9, den)
+    F = np.zeros_like(theta)
+    mask = np.abs(den) > 1e-10
+    F[mask] = num[mask] / den[mask]
+    F[~mask] = 1.0
+    return F
 
-    AF = np.abs(num / den)
-    return AF
+# -------------------- ПОВНА ДС --------------------
+F1 = np.abs(F1H(theta))
+FHC = np.abs(F_HC(theta))
+FH = F1 * FHC
+FHn = FH / np.max(FH)
 
-# ----------------------------------
-# ПОЛНАЯ ДИАГРАММА В H И E
-# ----------------------------------
-F_H = F_element(theta) * array_factor(theta)
-F_H_norm = F_H / np.max(F_H)
+F1n = F1 / np.max(F1)
+FHCn = FHC / np.max(FHC)
 
-# Для E-плоскости вводим дополнительный cosθ
-F_E = F_element(theta) * np.abs(np.cos(theta)) * array_factor(theta)
-F_E_norm = F_E / np.max(F_E)
+# -------------------- ПОШУК НУЛІВ --------------------
+threshold = 0.02
+is_min = (FHn[1:-1] < FHn[:-2]) & (FHn[1:-1] < FHn[2:])
+is_small = FHn[1:-1] < threshold
+zero_idx = np.where(is_min & is_small)[0] + 1
+zero_points = np.sort(theta_deg[zero_idx])
 
-# ----------------------------------
-# HPBW 0.707
-# ----------------------------------
-def HPBW(pattern, theta):
-    patt = pattern / np.max(pattern)
-    target = 1 / np.sqrt(2)
+# -------------------- ВИЗНАЧАЄМО МЕЖІ ГОЛОВНОЇ ПЕЛЮСТКИ --------------------
+left_zero = zero_points[zero_points < 0][-1]   # найближчий нуль зліва
+right_zero = zero_points[zero_points > 0][0]   # найближчий нуль справа
 
-    i0 = np.argmax(patt)
+# -------------------- ПОШУК ТІЛЬКИ БОКОВИХ МАКСИМУМІВ --------------------
+max_points = []
+for i in range(1, len(FHn) - 1):
 
-    left = None
-    for i in range(i0, 0, -1):
-        if patt[i] >= target and patt[i - 1] < target:
-            left = theta[i]
-            break
+    if FHn[i] > FHn[i - 1] and FHn[i] > FHn[i + 1]:
 
-    right = None
-    for i in range(i0, len(patt) - 1):
-        if patt[i] >= target and patt[i + 1] < target:
-            right = theta[i]
-            break
+        th = theta_deg[i]
 
-    if left is None or right is None:
-        return None
+        # Відсікаємо ВСІ максимуми всередині головної пелюстки:
+        if left_zero < th < right_zero:
+            continue
 
-    return np.degrees(right - left)
+        max_points.append((th, FHn[i]))
 
-# ----------------------------------
-# Уровень первого бокового лепестка
-# ----------------------------------
-def first_sidelobe_level(pattern, theta):
-    patt = pattern / np.max(pattern)
-    i0 = np.argmax(patt)
+# -------------------- ТОЧКИ РІВНЯ 0.707 --------------------
+level = 0.707
+crossings = []
+for i in range(len(FHn) - 1):
+    if (FHn[i] - level) * (FHn[i + 1] - level) < 0:
+        crossings.append(theta_deg[i])
 
-    start = i0 + 20
-    if start >= len(patt):
-        return None, None
+# -------------------- ГРАФІК --------------------
+plt.figure(figsize=(14, 7))
 
-    sub = patt[start:]
-    i_local = np.argmax(sub)
-    idx = start + i_local
+plt.plot(theta_deg, F1n, label="Елементна ДС F1H(θ)", linewidth=2, color="goldenrod")
+plt.plot(theta_deg, FHCn, label="Множник решітки FHC(θ)", linestyle="--", color="skyblue")
+plt.plot(theta_deg, FHn, label="Повна ДС F_H(θ)", linewidth=2, color="teal")
 
-    angle = np.degrees(theta[idx])
-    level = patt[idx]
-    level_db = 20 * np.log10(level)
+plt.axhline(level, linestyle="--", color="orange", label="Рівень 0.707")
 
-    return angle, level_db
+# Рівень 0.707
+for x in crossings:
+    plt.plot(x, level, 'ro')
+    plt.text(x, level + 0.03, f"{x:.2f}°", ha='center', color='red')
 
-# ----------------------------------
-# Расчет параметров
-# ----------------------------------
-hpbw_H = HPBW(F_H_norm, theta)
-hpbw_E = HPBW(F_E_norm, theta)
+# Нулі (лише номери)
+for i, x in enumerate(zero_points):
+    plt.plot(x, 0, 'kx')
+    plt.text(x, -0.03, f"θ₀{i+1}", ha='center', fontsize=8)
 
-theta_sl_H, sl_H_db = first_sidelobe_level(F_H_norm, theta)
-theta_sl_E, sl_E_db = first_sidelobe_level(F_E_norm, theta)
+# Бокові максимуми
+for i, (ang, val) in enumerate(max_points):
+    plt.plot(ang, val, 'go')
+    plt.text(ang, val + 0.03, f"θₘ{i+1}={ang:.1f}°", ha='center', color='green', fontsize=9)
 
-print(f"HPBW (H-плоскость): {hpbw_H:.2f} град")
-print(f"HPBW (E-плоскость): {hpbw_E:.2f} град")
-print(f"Первый боковой лепесток H: угол ≈ {theta_sl_H:.1f}°, уровень ≈ {sl_H_db:.1f} дБ")
-print(f"Первый боковой лепесток E: угол ≈ {theta_sl_E:.1f}°, уровень ≈ {sl_E_db:.1f} дБ")
-
-# ----------------------------------
-# Графики
-# ----------------------------------
-plt.figure(figsize=(10, 6))
-plt.plot(theta_deg, F_H_norm, label="H-площина")
-plt.axhline(0.707, linestyle="--", color="red")
-plt.xlabel("θ, град")
-plt.ylabel("Нормована ДС")
-plt.title("ДС ХвЩА у H-площині (варіант 10)")
+plt.xlabel("θ, градуси")
+plt.ylabel("Нормована амплітуда")
+plt.title("Повна ДС ХвЩА з підписами нулів і бокових максимумів (варіант 10)")
 plt.grid(True)
 plt.legend()
+plt.tight_layout()
 
-plt.figure(figsize=(10, 6))
-plt.plot(theta_deg, F_E_norm, label="E-площина")
-plt.axhline(0.707, linestyle="--", color="red")
-plt.xlabel("θ, град")
-plt.ylabel("Нормована ДС")
-plt.title("ДС ХвЩА у E-площині (варіант 10)")
-plt.grid(True)
-plt.legend()
+# -------------------- ТАБЛИЦІ --------------------
+
+print("\nТаблиця 1 — Нульові кути")
+print("---------------------------------")
+print("| № |   θ₀ [°]  |")
+for i, ang in enumerate(zero_points):
+    print(f"| {i+1:2d} | {ang:8.2f} |")
+print("---------------------------------\n")
+
+print("Таблиця 3 — Максимальні кути бокових пелюсток")
+print("-------------------------------------------")
+print("| № |  θₘ [°]  |  F_H(θₘ) |")
+for i, (ang, val) in enumerate(max_points):
+    print(f"| {i+1:2d} | {ang:8.2f} |  {val:.4f} |")
+print("-------------------------------------------")
 
 plt.show()
