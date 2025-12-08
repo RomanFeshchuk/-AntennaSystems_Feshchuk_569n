@@ -1,118 +1,224 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.special import jv
-from scipy.signal import find_peaks
+from scipy.special import j0, j1, jn
 
-# ---------------------------------------------------------------------------
-# ВАРІАНТ 10 (додані твої значення)
-# ---------------------------------------------------------------------------
-lam = 0.029   # довжина хвилі, м
-D = 0.7       # діаметр дзеркала, м
-f = 0.3       # фокусна відстань, м
+# -----------------------------
+# Вхідні дані (варіант 10)
+# -----------------------------
+lam = 0.029
+D = 0.7
+f = 0.3
+R0 = D / 2
+p = 2 * f
+k = 2 * np.pi / lam
 
-# ---------------------------------------------------------------------------
-# РОЗРАХУНКИ ОСНОВНИХ ПАРАМЕТРІВ
-# ---------------------------------------------------------------------------
-k = 2 * np.pi / lam          # хвильове число
-R0 = D / 2                   # радіус дзеркала
-p = 2 * f                    # подвоєний фокус
+v = 3.5 * R0 / p
+NORM = 1 / (0.74 * (j1(v)/v) + 0.13)
 
-theta_deg = np.linspace(-90, 90, 3000)
+def J0(x): return j0(x)
+def J1(x): return j1(x)
+def J2(x): return jn(2, x)
+
+def safe_div(a, b):
+    a = np.array(a, dtype=float)
+    b = np.array(b, dtype=float)
+    out = np.zeros_like(a)
+    mask = (b != 0)
+    out[mask] = a[mask] / b[mask]
+    return out
+
+# -----------------------------
+# Формули 7.16 і 7.17
+# -----------------------------
+def F_E(theta):
+    u = k * R0 * np.sin(theta)
+    denom1 = v**2 - u**2
+    denom2 = (1.5 * v)**2 - u**2
+    t1 = 0.74 * (v * J1(v) * J0(u) - u * J1(u) * J0(v))
+    t1 = safe_div(t1, denom1)
+    t2 = 0.26 * safe_div(J1(u), u)
+    t3 = 0.25 * (u * J1(u) * J2(1.5 * v) - 1.5 * v * J1(1.5 * v) * J2(u))
+    t3 = safe_div(t3, denom2)
+    return (np.cos(theta)**2 / 2) * (t1 + t2 + t3) * NORM
+
+def F_H(theta):
+    u = k * R0 * np.sin(theta)
+    denom1 = v**2 - u**2
+    denom2 = (1.5 * v)**2 - u**2
+    t1 = 0.74 * (v * J1(v) * J0(u) - u * J1(u) * J0(v))
+    t1 = safe_div(t1, denom1)
+    t2 = 0.26 * safe_div(J1(u), u)
+    t3 = 0.25 * (u * J1(u) * J2(1.5 * v) - 1.5 * v * J1(1.5 * v) * J2(u))
+    t3 = safe_div(t3, denom2)
+    return (np.cos(theta)**2 / 2) * (t1 + t2 - t3) * NORM
+
+# -----------------------------
+# Основні обчислення
+# -----------------------------
+theta_deg = np.linspace(0, 90, 4000)
 theta = np.radians(theta_deg)
 
-u = k * R0 * np.sin(theta)
-v = k * p * np.sin(theta / 2)
+FE_raw = F_E(theta)
+FH_raw = F_H(theta)
 
-# захист від ділення на нуль
-u[u == 0] = 1e-9
-v[v == 0] = 1e-9
+# Нормування (амплітуда в 0° = 1)
+FE = FE_raw / np.abs(FE_raw[0])
+FH = FH_raw / np.abs(FH_raw[0])
 
-# ---------------------------------------------------------------------------
-# ФУНКЦІЇ ДС В Е- ТА Н-ПЛОЩИНАХ
-# ---------------------------------------------------------------------------
+x_axis = k * R0 * np.sin(theta)
 
-def FH(theta, u, v):
-    term1 = 0.74 * (v*jv(1, v)*jv(0, u) - u*jv(1, u)*jv(0, v)) / (v**2 - u**2)
-    term2 = 0.26 * (jv(1, u) / u)
-    term3 = -0.25 * (u*jv(1, u)*jv(2, 1.5*v) - 1.5*v*jv(1, 1.5*v)*jv(2, u)) / ((1.5*v)**2 - u**2)
-    denom = 1 / (0.74*(jv(1, v) / v) + 0.13)
-    return np.cos(theta/2)**2 * (term1 + term2 + term3) * denom
+# -----------------------------
+# ПОШУК НУЛІВ
+# -----------------------------
+def find_zeros(F):
+    zeros = []
+    for i in range(len(F)-1):
+        if F[i] * F[i+1] < 0:
+            zeros.append(i if abs(F[i]) < abs(F[i+1]) else i+1)
+    return np.array(zeros)
 
+zerosE = find_zeros(FE_raw)
+zerosH = find_zeros(FH_raw)
 
-def FE(theta, u, v):
-    term1 = 0.74 * (v*jv(1, v)*jv(0, u) - u*jv(1, u)*jv(0, v)) / (v**2 - u**2)
-    term2 = 0.26 * (jv(1, u) / u)
-    term3 = +0.25 * (u*jv(1, u)*jv(2, 1.5*v) - 1.5*v*jv(1, 1.5*v)*jv(2, u)) / ((1.5*v)**2 - u**2)
-    denom = 1 / (0.74*(jv(1, v) / v) + 0.13)
-    return np.cos(theta/2)**2 * (term1 + term2 + term3) * denom
+# -----------------------------
+# ПОШУК МАКСИМУМІВ
+# -----------------------------
+def find_maxima(F):
+    dF = np.diff(F)
+    return np.where((dF[:-1] > 0) & (dF[1:] < 0))[0] + 1
 
-# ---------------------------------------------------------------------------
-# ОБЧИСЛЕННЯ ДС
-# ---------------------------------------------------------------------------
-FH_raw = FH(theta, u, v)
-FE_raw = FE(theta, u, v)
+maxE = find_maxima(FE_raw)
+maxH = find_maxima(FH_raw)
 
-# нормалізація
-FH_n = FH_raw / np.max(FH_raw)
-FE_n = FE_raw / np.max(FE_raw)
+# -----------------------------
+# HPBW
+# -----------------------------
+half = 0.707
 
-# ---------------------------------------------------------------------------
-# ШИРИНА ГОЛОВНОЇ ПЕЛЮСТКИ (0.707)
-# ---------------------------------------------------------------------------
-def beamwidth(theta_deg, pattern):
-    idx = np.where(pattern >= 0.707)[0]
-    return theta_deg[idx[-1]] - theta_deg[idx[0]]
+idx_E = np.where(FE >= half)[0]
+idx_H = np.where(FH >= half)[0]
 
-BW_H = beamwidth(theta_deg, FH_n)
-BW_E = beamwidth(theta_deg, FE_n)
+#точка HPBW
+HPBW_E = idx_E[-1]
+HPBW_H = idx_H[-1]
 
-print("Ширина головної пелюстки (Н-площина):", BW_H, "град")
-print("Ширина головної пелюстки (Е-площина):", BW_E, "град")
+HP_E_x = x_axis[HPBW_E]
+HP_E_y = half
 
-# ---------------------------------------------------------------------------
-# АНАЛІЗ БОКОВИХ ПЕЛЮСТОК (SLL)
-# ---------------------------------------------------------------------------
-# Н-площина
-main_lobe_H = np.argmax(FH_n)
-peaks_H, _ = find_peaks(FH_n)
-side_H = [p for p in peaks_H if abs(p - main_lobe_H) > 50]
+HP_H_x = x_axis[HPBW_H]
+HP_H_y = half
 
-sll_H = np.max(FH_n[side_H])
-sll_H_dB = 20*np.log10(sll_H)
-sll_H_angle = theta_deg[side_H][np.argmax(FH_n[side_H])]
+# -----------------------------
+# ГРАФІК
+# -----------------------------
+plt.figure(figsize=(14, 7))
+plt.plot(x_axis, FE, label="E-площина", color='orange')
+plt.plot(x_axis, FH, label="H-площина", color='teal')
 
-print("\nАНАЛІЗ БОКОВИХ ПЕЛЮСТОК — Н-площина")
-print("SLL =", round(sll_H_dB, 2), "дБ")
-print("Кут появи =", round(sll_H_angle, 2), "град")
+# НУЛІ
+plt.scatter(x_axis[zerosE], FE[zerosE], color='black', marker='x', s=50)
+plt.scatter(x_axis[zerosH], FH[zerosH], color='black', marker='x', s=50)
 
-# Е-площина
-main_lobe_E = np.argmax(FE_n)
-peaks_E, _ = find_peaks(FE_n)
-side_E = [p for p in peaks_E if abs(p - main_lobe_E) > 50]
+# МАКСИМУМИ
+plt.scatter(x_axis[maxE], FE[maxE], color='red', s=30)
+plt.scatter(x_axis[maxH], FH[maxH], color='blue', s=30)
 
-sll_E = np.max(FE_n[side_E])
-sll_E_dB = 20*np.log10(sll_E)
-sll_E_angle = theta_deg[side_E][np.argmax(FE_n[side_E])]
+# HPBW
+plt.scatter(HP_E_x, HP_E_y, color='orange', edgecolors='black', s=90)
+plt.scatter(HP_H_x, HP_H_y, color='teal', edgecolors='black', s=90)
 
-print("\nАНАЛІЗ БОКОВИХ ПЕЛЮСТОК — Е-площина")
-print("SLL =", round(sll_E_dB, 2), "дБ")
-print("Кут появи =", round(sll_E_angle, 2), "град")
+plt.axhline(0.707, linestyle="--", color="gray", label="Рівень 0.707")
 
-# ---------------------------------------------------------------------------
-# ГРАФІКИ
-# ---------------------------------------------------------------------------
-plt.figure(figsize=(10, 6))
-plt.plot(theta_deg, FH_n)
-plt.title("ДС Дзеркальної Антени — Н-площина (нормована)")
-plt.xlabel("θ, градуси")
-plt.ylabel("F_H(θ)")
+plt.title("ДС дзеркальної антени у координаті kR₀·sin(θ)\n(формули 7.16 та 7.17)")
+plt.xlabel("kR₀·sin(θ)")
+plt.ylabel("Нормована амплітуда")
 plt.grid(True)
-plt.show()
+plt.legend()
+plt.ylim(-0.2, 1.1)
 
-plt.figure(figsize=(10, 6))
-plt.plot(theta_deg, FE_n)
-plt.title("ДС Дзеркальної Антени — Е-площина (нормована)")
-plt.xlabel("θ, градуси")
-plt.ylabel("F_E(θ)")
-plt.grid(True)
+# -----------------------------
+# ТАБЛИЦІ
+# -----------------------------
+print("\nТаблиця 1 — Нульові значення (E та H)")
+print("---------------------------------------------")
+
+m = 1
+for idx in zerosE:
+    print(f"{m:2d}. E  θ={theta_deg[idx]:8.3f}°   u={x_axis[idx]:8.4f}")
+    m += 1
+for idx in zerosH:
+    print(f"{m:2d}. H  θ={theta_deg[idx]:8.3f}°   u={x_axis[idx]:8.4f}")
+    m += 1
+
+print("\nТаблиця 2 — Максимальні значення (E)")
+m = 1
+for idx in maxE:
+    print(f"{m:2d}. θ={theta_deg[idx]:8.3f}°   u={x_axis[idx]:8.4f}   F={FE[idx]:6.4f}")
+    m += 1
+
+print("\nТаблиця 3 — Максимальні значення (H)")
+m = 1
+for idx in maxH:
+    print(f"{m:2d}. θ={theta_deg[idx]:8.3f}°   u={x_axis[idx]:8.4f}   F={FH[idx]:6.4f}")
+    m += 1
+
+# ============================================================
+#  РОЗРАХУНОК HPBW (ширини головної пелюстки)
+# ============================================================
+
+def compute_hpbw(F, theta_deg):
+    half = 0.707
+
+    # знаходимо праву точку перетину з рівнем 0.707
+    idx = np.where(F >= half)[0]
+    theta_half = theta_deg[idx[-1]]  # права точка
+
+    # HPBW = повна ширина головної пелюстки
+    return 2 * theta_half, theta_half
+
+
+HPBW_E_full, HPBW_E_right = compute_hpbw(FE, theta_deg)
+HPBW_H_full, HPBW_H_right = compute_hpbw(FH, theta_deg)
+
+print("\n================== HPBW ==================")
+print(f"HPBW (E-площина): {HPBW_E_full:.3f}°  (права точка: {HPBW_E_right:.3f}°)")
+print(f"HPBW (H-площина): {HPBW_H_full:.3f}°  (права точка: {HPBW_H_right:.3f}°)")
+
+
+# ============================================================
+#  РОЗРАХУНОК SLL (side lobe level — рівень бокового пелюстка)
+# ============================================================
+
+def compute_sll(F, theta_deg, zeros):
+    first_zero = zeros[0]
+
+    # беремо ділянку після першого нуля
+    F_seg = F[first_zero+1:]
+    dF = np.diff(F_seg)
+
+    # шукаємо локальні максимуми
+    maxima = np.where((dF[:-1] > 0) & (dF[1:] < 0))[0] + 1
+
+    if len(maxima) == 0:
+        return None, None
+
+    # найбільший пелюсток
+    idx_loc = maxima[np.argmax(F_seg[maxima])]
+    idx_global = first_zero + 1 + idx_loc
+
+    amplitude = F[idx_global]
+    angle = theta_deg[idx_global]
+
+    SLL_dB = 20 * np.log10(abs(amplitude))
+
+    return SLL_dB, angle
+
+
+SLL_E_dB, SLL_E_angle = compute_sll(FE, theta_deg, zerosE)
+SLL_H_dB, SLL_H_angle = compute_sll(FH, theta_deg, zerosH)
+
+print("\n================== SLL ==================")
+print(f"SLL (E): {SLL_E_dB:.2f} дБ при куті {SLL_E_angle:.3f}°")
+print(f"SLL (H): {SLL_H_dB:.2f} дБ при куті {SLL_H_angle:.3f}°")
+
 plt.show()
